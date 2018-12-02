@@ -1,0 +1,121 @@
+---
+- hosts: web_nodes
+  become: yes
+  vars:
+    project_name: wp_raf
+    database_password: "SuperStrongPasssword"
+    wordpress_url: https://wordpress.org/latest.tar.gz
+    wp_db_ip: "172.31.31.78"
+  tasks:
+    - name: "Install httpd server"
+      yum:
+        name: httpd
+        state: latest
+    - name: "Restart httpd service"
+      service:
+        name: httpd
+        state: restarted
+    - name: "install php module"
+      yum:
+        name: "{{item}}"
+        state: latest
+      with_items:
+        - php
+        - php-mysql
+    - name: "create directory for wordpress"
+      file:
+        path: "/var/www/{{project_name}}"
+        state: directory
+    - name: "download and install WordPress"
+      unarchive:
+        src: "{{wordpress_url}}"
+        dest: "/var/www/{{project_name}}"
+        remote_src: yes
+        extra_opts: [--strip-components=1]
+    - name: "configure vhosts"
+      template:
+        src: "./templates/vhosts.conf"
+        dest: /etc/httpd/conf.d/wp.conf
+    - name: "configure wordpress"
+      template:
+        src: ./templates/wp-config.php
+        dest: "/var/www/{{project_name}}/wp-config.php"
+    - name: "Reload httpd"
+      service:
+        name: httpd
+        state: restarted
+- hosts: db_nodes
+  become: yes
+  vars:
+    project_name: wp_raf
+    database_password: "SuperStrongPasssword"
+    wp_db_ip: "172.31.31.78"
+  tasks:
+    - name: "install db server"
+      yum:
+        name: "{{item}}"
+        state: latest
+      with_items:
+        - mariadb
+        - mariadb-server
+        - MySQL-python
+    - name: "restart mariadb"
+      service:
+        name: mariadb
+        state: restarted
+    - name: "create wordpress database"
+      mysql_db:
+        name: "{{project_name}}"
+        state: present
+    - name: "create wordpress database user"
+      mysql_user:
+        name: "db_{{project_name}}"
+        password: "{{database_password}}"
+        priv: '*.*:ALL'
+        host: '%'
+        state: present
+- hosts: metrics_source
+  become: yes
+  vars:
+    telegraf_url: https://dl.influxdata.com/telegraf/releases/telegraf-1.8.3-1.x86_64.rpm
+    metric_store_ip: "172.31.31.78"
+  tasks:
+    - name: "install telegraf"
+      yum:
+        name: "{{telegraf_url}}"
+        state: present
+    - name: "copy cfg into dest"
+      template:
+        src: templates/telegraf.conf
+        dest: /etc/telegraf/telegraf.conf
+    - name: "start telegraf"
+      service:
+        name: "telegraf"
+        state: restarted
+- hosts: metrics_store
+  become: yes
+  vars:
+    influxdb_url: https://dl.influxdata.com/influxdb/releases/influxdb-1.7.1.x86_64.rpm
+  tasks:
+    - name: "install influx"
+      yum:
+        name: "{{influxdb_url}}"
+        state: present
+    - service:
+        name: influxdb
+        state: started
+- hosts: metrics_graph
+  become: yes
+  vars:
+    grafana_url: https://s3-us-west-2.amazonaws.com/grafana-releases/release/grafana-5.3.4-1.x86_64.rpm
+  tasks:
+    - yum:
+        name: "{{grafana_url}}"
+        state: present
+    - name: "Copy Grafana configuration"
+      template:
+        src: ./templates/grafana.ini
+        dest: /etc/grafana/grafana.ini
+    - service:
+        name: "grafana-server"
+        state: started
